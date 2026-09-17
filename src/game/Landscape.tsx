@@ -115,8 +115,14 @@ export const World = memo(function World() {
     </RigidBody>
     <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -32, -230]}><planeGeometry args={[2800, 2800]} /><meshStandardMaterial color="#81becb" metalness={0.4} roughness={0.3} /></mesh>
     {ROUTES.map(([a, b]) => {
-      const start = DISTRICTS[a], end = DISTRICTS[b], length = Math.hypot(end.x - start.x, end.z - start.z), angle = Math.atan2(end.x - start.x, end.z - start.z)
-      return <group key={`${a}-${b}`} position={[(start.x + end.x) / 2, 0.05, (start.z + end.z) / 2]} rotation={[0, angle, 0]}>
+      const start = DISTRICTS[a], end = DISTRICTS[b]
+      const dx = end.x - start.x, dz = end.z - start.z, distance = Math.hypot(dx, dz)
+      // Join the plaza rim with a short apron, without overlapping its interior
+      // metal panels or other roads at the same elevation (z-fighting).
+      const startOffset = start.radius - 2, endOffset = end.radius - 2
+      const length = distance - startOffset - endOffset, angle = Math.atan2(dx, dz)
+      const midpoint = (startOffset + distance - endOffset) / 2
+      return <group key={`${a}-${b}`} position={[start.x + dx / distance * midpoint, 0.05, start.z + dz / distance * midpoint]} rotation={[0, angle, 0]}>
         <Structure position={[0, 0, 0]} size={[15, 0.08, length]} color="#cbd8cf" />
         {[-1, 1].map(s => <mesh key={s} position={[s * 6.5, 0.05, 0]} rotation={[-Math.PI / 2, 0, 0]}><planeGeometry args={[0.14, length]} /><meshBasicMaterial color="#ecf5df" /></mesh>)}
         <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.06, 0]}><planeGeometry args={[0.16, length]} /><meshBasicMaterial color="#799f99" /></mesh>
