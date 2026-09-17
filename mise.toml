@@ -1,0 +1,9 @@
+[tools]
+node = "24.18.0"
+pnpm = "11.24.0"
+
+[tasks.dev]
+run = "pnpm dev"
+
+[tasks.check]
+run = "pnpm typecheck && pnpm test && pnpm build"
