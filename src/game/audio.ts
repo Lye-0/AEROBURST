@@ -14,15 +14,19 @@ export class GameAudio {
     } catch { /* The game remains playable when audio is unavailable. */ }
   }
 
-  play(kind: 'slash' | 'hit' | 'kill' | 'dash' | 'jump' | 'hurt' | 'burst' | 'wave') {
+  private lastPlayed: Record<string, number> = {}
+  play(kind: 'slash' | 'hit' | 'kill' | 'dash' | 'jump' | 'hurt' | 'burst' | 'wave' | 'skill' | 'shield' | 'lance') {
     if (!this.context || !this.master || !this.volume) return
     const ctx = this.context
     const now = ctx.currentTime
+    if (now - (this.lastPlayed[kind] ?? -1) < 0.035) return
+    this.lastPlayed[kind] = now
     const notes: Record<typeof kind, [number, number, number, OscillatorType]> = {
       slash: [420, 75, 0.11, 'sawtooth'], hit: [150, 40, 0.12, 'square'],
       kill: [660, 1320, 0.19, 'triangle'], dash: [110, 660, 0.18, 'sawtooth'],
       jump: [240, 550, 0.13, 'sine'], hurt: [120, 35, 0.25, 'sawtooth'],
       burst: [70, 750, 0.65, 'sawtooth'], wave: [440, 880, 0.4, 'sine'],
+      skill: [90, 680, 0.35, 'sawtooth'], shield: [900, 1800, 0.2, 'sine'], lance: [1400, 90, 0.4, 'sawtooth'],
     }
     const [from, to, duration, type] = notes[kind]
     const oscillator = ctx.createOscillator()

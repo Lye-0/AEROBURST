@@ -7,5 +7,6 @@ import '@fontsource/barlow-condensed/latin-800-italic.css'
 import '@fontsource/barlow-condensed/latin-900-italic.css'
 import '@fontsource-variable/noto-sans-jp'
 import './styles.css'
+import './frontier.css'
 
 createRoot(document.getElementById('root')!).render(<App />)

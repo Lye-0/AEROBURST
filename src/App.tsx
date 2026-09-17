@@ -1,12 +1,14 @@
 import { Component, Suspense, useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { Scene } from './game/Scene'
-import { game, clamp, rankFor, type Settings, type Snapshot } from './game/core'
+import { game, clamp, SKILLS, type Settings } from './game/core'
+import { FlightHUD, WorldMap } from './FlightHUD'
 
 const controls = [
   ['W A S D', '移動', 'カメラの向きに合わせて移動'], ['MOUSE', '視点', 'マウスを動かして見渡す'],
-  ['SPACE', 'ジャンプ', '空中でもう一度押すと二段ジャンプ'], ['SHIFT', 'ダッシュ', '照準の敵へ接近。撃破で2回分回復'],
+  ['SPACE', '二段ジャンプ / 滑空', '空中で長押しすると滑空。ブーストと併用で上昇'], ['SHIFT', 'ブリンク / ブースト', '視点方向へ瞬間移動。長押しで高速飛行。撃破で3回分回復'],
   ['左クリック', '斬撃', '長押しで連続攻撃。空中でも使用可能'], ['右クリック', '打ち上げ / 急降下', '地上では敵を打ち上げ、空中では急降下'],
-  ['Q', 'エアロバースト', 'ゲージ100%で周囲の敵を一掃'], ['ESC / P', 'ポーズ', '設定・操作確認・リトライ'],
+  ...SKILLS.map(s => [s.key, s.name, s.description]),
+  ['Q', 'エアロバースト', 'ゲージ100%で半径48mの敵を一掃'], ['M', '全域マップ', '6地区の状況確認と目的地の指定'], ['ESC / P', 'ポーズ', '設定・操作確認・リトライ'],
 ]
 const timeLabel = (time: number) => `${Math.floor(time / 60).toString().padStart(2, '0')}:${Math.floor(time % 60).toString().padStart(2, '0')}`
 function Mark() { return <svg viewBox="0 0 32 32" fill="none" aria-hidden="true"><path d="m19 2-15 18h11l-2 10L29 11H18l1-9Z" fill="currentColor" /></svg> }
@@ -55,38 +57,7 @@ function SettingsPanel({ settings, onChange }: { settings: Settings; onChange: (
   </div>
 }
 
-function Radar() {
-  const p = game.player
-  return <div className="radar-wrap"><svg viewBox="0 0 100 100" role="img" aria-label="レーダー：敵と自機の位置">
-    <circle cx="50" cy="50" r="46" fill="#153e4840" stroke="#ffffff60" strokeWidth="0.5" />
-    <circle cx="50" cy="50" r="25" fill="none" stroke="#ffffff30" strokeWidth="0.5" />
-    <path d="M4 50h92M50 4v92" stroke="#ffffff30" strokeWidth="0.5" />
-    {game.enemies.filter(e => e.active).map(e => <circle key={e.id} cx={50 + e.x * 1.4} cy={50 + e.z * 1.4} r={e.kind === 'boss' ? 4 : 2} fill="#ff9a71" />)}
-    <path d="m0-4-3 7 3-1 3 1Z" fill="#dfffcb" transform={`translate(${50 + p.x * 1.4},${50 + p.z * 1.4}) rotate(${-p.yaw * 180 / Math.PI + 180})`} />
-  </svg><span>SECTOR / {String(game.wave).padStart(2, '0')}</span></div>
-}
-
-function HUD({ state, onPause }: { state: Snapshot; onPause: () => void }) {
-  return <div className="hud">
-    <div className="hud-top">
-      <div className="pilot-status"><div className="status-label"><span className="live-dot" /> AE–01 <span>PILOT STATUS</span><b>{Math.ceil(state.hp)}<small>/100</small></b></div><div className="health-track"><div style={{ width: `${state.hp}%` }} /></div><div className="status-sub"><span>HULL INTEGRITY</span><span>{state.hp > 30 ? 'SYSTEM NORMAL' : 'HULL CRITICAL'}</span></div></div>
-      <div className="mission-status"><span className="eyebrow">{state.wave === 4 ? 'FINAL ENCOUNTER' : 'CLEAR THE SECTOR'}</span><strong>{state.wave === 4 ? '守護機を撃破' : 'すべての敵を撃破'}<small>残り {state.remaining} 体</small></strong></div>
-      <div className="score-status"><span className="eyebrow">SCORE</span><b>{state.score.toLocaleString().padStart(6, '0')}</b><span>{timeLabel(state.time)}<button className="pause-button" onClick={onPause} aria-label="ポーズ">Ⅱ</button></span></div>
-    </div>
-    {state.bossMaxHp > 0 && <div className="boss-hud"><span>G–07 / SKY GUARDIAN</span><div><i style={{ width: `${state.bossHp / state.bossMaxHp * 100}%` }} /></div></div>}
-    {state.message && <div className="announcement" key={state.message}><strong>{state.message}</strong><p>{state.messageSub}</p></div>}
-    <div className="crosshair" aria-hidden="true"><i /><i /></div>
-    {!state.locked && state.mode === 'playing' && <div className="capture-hint">画面をクリックして操作開始 <span>Escで解除</span></div>}
-    {game.pointerFallback && state.mode === 'playing' && <div className="fallback-hint">視点：マウス中央ボタンを押しながらドラッグ / ← → キー</div>}
-    <div className="hud-bottom">
-      <Radar />
-      <div className="abilities"><div className="dash-status"><div className="dash-pips">{[0, 1].map(i => <i key={i} style={{ background: i < state.dashes ? '#cfffbe' : `linear-gradient(90deg, #cfffbe ${i === state.dashes ? state.dashCharge / 1.2 * 100 : 0}%, #ffffff20 0)` }} />)}</div><span><kbd>SHIFT</kbd> DASH</span></div><div className={`burst-status ${state.energy >= 100 ? 'ready' : ''}`}><div className="burst-meter"><i style={{ width: `${state.energy}%` }} /></div><span><kbd>Q</kbd> AEROBURST <b>{state.energy >= 100 ? 'READY' : `${Math.floor(state.energy)}%`}</b></span></div><div className="attack-status"><span><kbd>LMB</kbd> 斬撃</span><span><kbd>RMB</kbd> 打ち上げ</span></div></div>
-      <div className={`combo-status ${state.combo > 0 ? 'active' : ''}`}><span className="combo-rank">{rankFor(state.combo)}</span><div><span className="eyebrow">{state.combo >= 18 ? 'AIR SUPERIORITY' : 'CHAIN COMBO'}</span><strong>{state.combo.toString().padStart(2, '0')}<small>HITS</small></strong></div></div>
-    </div>
-  </div>
-}
-
-function useGameInput() {
+function useGameInput(onMap: () => void) {
   useEffect(() => {
     const canvas = () => document.querySelector('canvas')
     const keydown = (event: KeyboardEvent) => {
@@ -96,21 +67,26 @@ function useGameInput() {
         return
       }
       if (game.mode !== 'playing') return
+      if (event.code === 'KeyM') { event.preventDefault(); onMap(); return }
       if (['Space', 'ShiftLeft', 'ShiftRight', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ'].includes(event.code)) event.preventDefault()
       game.keys.add(event.code)
       if (event.code === 'ArrowLeft') { game.cameraYaw += 0.12; event.preventDefault() }
       if (event.code === 'ArrowRight') { game.cameraYaw -= 0.12; event.preventDefault() }
+      if (event.code === 'ArrowUp') { game.cameraPitch = clamp(game.cameraPitch - 0.1, -0.85, 1.1); event.preventDefault() }
+      if (event.code === 'ArrowDown') { game.cameraPitch = clamp(game.cameraPitch + 0.1, -0.85, 1.1); event.preventDefault() }
       if (!event.repeat) {
         if (event.code === 'Space') game.action('jump')
         if (event.code.startsWith('Shift')) game.action('dash')
         if (event.code === 'KeyQ') game.action('burst')
+        const skill = SKILLS.find(s => 'Key' + s.key === event.code)
+        if (skill) { event.preventDefault(); game.action(skill.id) }
       }
     }
     const keyup = (event: KeyboardEvent) => game.keys.delete(event.code)
     const mousemove = (event: MouseEvent) => {
       if (game.mode !== 'playing' || (!document.pointerLockElement && !(game.pointerFallback && event.buttons === 4))) return
       game.cameraYaw -= event.movementX * 0.0022 * game.settings.sensitivity
-      game.cameraPitch = clamp(game.cameraPitch + event.movementY * 0.0018 * game.settings.sensitivity, -0.15, 1.1)
+      game.cameraPitch = clamp(game.cameraPitch + event.movementY * 0.0018 * game.settings.sensitivity, -0.85, 1.1)
     }
     const mousedown = (event: MouseEvent) => {
       if (game.mode !== 'playing' || (event.target !== canvas() && !document.pointerLockElement)) return
@@ -139,7 +115,7 @@ function useGameInput() {
       window.removeEventListener('contextmenu', context); window.removeEventListener('blur', blur)
       document.removeEventListener('pointerlockchange', lockchange); document.removeEventListener('visibilitychange', visibility)
     }
-  }, [])
+  }, [onMap])
 }
 function requestControl() {
   game.audio.unlock()
@@ -152,11 +128,12 @@ function requestControl() {
 export function App() {
   const state = useSyncExternalStore(game.subscribe, game.getSnapshot)
   const [ready, setReady] = useState(false)
-  const [panel, setPanel] = useState<'settings' | 'controls' | null>(null)
+  const [panel, setPanel] = useState<'settings' | 'controls' | 'map' | null>(null)
   const [settings, setSettings] = useState(game.settings)
   const onReady = useCallback(() => setReady(true), [])
   const closePanel = useCallback(() => setPanel(null), [])
-  useGameInput()
+  const openMap = useCallback(() => { game.pause(); setPanel('map') }, [])
+  useGameInput(openMap)
   useEffect(() => {
     // Explicit development-only QA surface. Never bundled into production.
     if (import.meta.env.DEV && new URLSearchParams(location.search).has('qa')) {
@@ -175,15 +152,16 @@ export function App() {
     {settings.flashes && state.mode === 'playing' && <div className="damage-vignette" style={{ opacity: game.damageFlash * 1.5 }} />}
     {title ? <>
       <header className="title-header"><a className="brand" href="#" aria-label="AEROBURST タイトル"><Mark /><span>AEROBURST<small>AERIAL COMBAT SYSTEM</small></span></a><div className="header-actions"><span className="build-label"><i /> SYSTEM ONLINE</span><button className="icon-button" onClick={() => updateSettings({ ...settings, volume: settings.volume ? 0 : 0.45 })} aria-label={settings.volume ? '消音にする' : '音を有効にする'}><SoundIcon muted={!settings.volume} /></button><button className="text-button" onClick={() => setPanel('settings')}>設定 <span>↗</span></button></div></header>
-      <section className="title-content"><div className="edition"><span>01</span> SKYLINE OPERATION <i /></div><h1>AERO<br /><span>BURST</span></h1><p className="tagline">空を、連鎖しろ。</p><p className="intro">飛び込め。斬り抜けろ。<br />撃破のたびに、加速する。</p><div className="title-buttons"><button className="primary launch-button" disabled={!ready} onClick={start}><span>{ready ? '出撃する' : '機体を準備中…'}<small>{ready ? 'LAUNCH MISSION' : 'INITIALIZING'}</small></span><span className="button-arrow">↗</span></button><button className="secondary" onClick={() => setPanel('controls')}>操作方法 <span>↗</span></button></div><div className="mission-meta"><span><i /> SINGLE PLAYER</span><span>4 SECTORS / 1 MISSION</span><span>KEYBOARD + MOUSE</span></div></section>
-      <div className="pilot-label"><span>AE–01</span><i /><div>BURST FRAME<small>空中戦闘試験機</small></div></div>
+      <section className="title-content"><div className="edition"><span>01</span> FRONTIER EXPANSION <i /></div><h1>AERO<br /><span>BURST</span></h1><p className="tagline">空を、連鎖しろ。</p><p className="intro">飛び込め。斬り抜けろ。<br />広がる世界を、解き放て。</p><div className="title-buttons"><button className="primary launch-button" disabled={!ready} onClick={start}><span>{ready ? '出撃する' : '機体を準備中…'}<small>{ready ? 'LAUNCH MISSION' : 'INITIALIZING'}</small></span><span className="button-arrow">↗</span></button><button className="secondary" onClick={() => setPanel('controls')}>操作方法 <span>↗</span></button></div><div className="mission-meta"><span><i /> SINGLE PLAYER</span><span>6 DISTRICTS / OPEN FIELD</span><span>KEYBOARD + MOUSE</span></div></section>
+      <div className="pilot-label"><span>AE–01</span><i /><div>BURST FRAME<small>広域制圧戦闘機</small></div></div>
       <div className="title-coordinate">ALT. 8,400 M<br />35° 41′ N / 139° 41′ E</div>
       <footer className="title-footer"><div className="mechanic"><span>01 /</span><strong>DASH</strong><p>距離を、消す。</p></div><div className="mechanic"><span>02 /</span><strong>SLASH</strong><p>撃破を、つなぐ。</p></div><div className="mechanic"><span>03 /</span><strong>BURST</strong><p>空域を、制する。</p></div><div className="record"><span>PERSONAL BEST</span><strong>{state.best.toLocaleString().padStart(6, '0')}</strong></div></footer>
-    </> : <HUD state={state} onPause={() => game.pause()} />}
+    </> : <FlightHUD state={state} onPause={() => game.pause()} onMap={openMap} />}
     {state.mode === 'paused' && !panel && <div className="modal-backdrop"><section className="pause-panel" aria-label="ポーズメニュー"><span className="eyebrow">FLIGHT SUSPENDED</span><h2>ひと息、つこう。</h2><p>準備ができたら、もう一度空へ。</p><button className="primary" onClick={resume} autoFocus>戦闘に戻る <span>↗</span></button><button className="secondary" onClick={() => setPanel('settings')}>設定</button><button className="secondary" onClick={() => setPanel('controls')}>操作方法</button><div className="pause-links"><button onClick={start}>最初からやり直す</button><button onClick={() => game.title()}>タイトルへ</button></div></section></div>}
     {result && <div className="modal-backdrop result-backdrop"><section className="result-panel"><span className="eyebrow">{state.mode === 'won' ? 'ALL SECTORS CLEAR' : 'SIGNAL LOST'}</span><h2>{state.mode === 'won' ? <>空は、<br />君のもの。</> : <>もう一度、<br />飛び立とう。</>}</h2><p>{state.mode === 'won' ? '守護機の停止を確認。作戦完了。' : '機体の耐久値がゼロになりました。'}</p><div className="result-score"><span>MISSION SCORE</span><strong>{state.score.toLocaleString()}</strong></div><div className="result-stats"><div><span>TIME</span><b>{timeLabel(state.time)}</b></div><div><span>MAX COMBO</span><b>{state.maxCombo}<small>HITS</small></b></div><div><span>DESTROYED</span><b>{state.kills}</b></div></div><button className="primary" onClick={start} autoFocus>もう一度出撃 <span>↗</span></button><button className="text-button" onClick={() => game.title()}>タイトルへ戻る</button></section></div>}
     {panel === 'settings' && <Modal title="フライト設定" subtitle="FLIGHT SETTINGS" onClose={closePanel}><SettingsPanel settings={settings} onChange={updateSettings} /></Modal>}
-    {panel === 'controls' && <Modal title="パイロットガイド" subtitle="PILOT FIELD MANUAL" onClose={closePanel}><div className="controls-list">{controls.map(([key, label, desc]) => <div className="control" key={key}><kbd>{key}</kbd><div><strong>{label}</strong><p>{desc}</p></div></div>)}</div><div className="guide-tip"><Mark /><p><strong>撃破が、次の推進力になる。</strong><br />敵を倒すとダッシュが回復。地上の緑のパッドで高く跳べます。</p></div></Modal>}
+    {panel === 'map' && <Modal title="フロンティア全域" subtitle="TACTICAL WORLD MAP" onClose={closePanel}><WorldMap state={state} onSelect={id => { game.selectObjective(id); resume() }} /></Modal>}
+    {panel === 'controls' && <Modal title="パイロットガイド" subtitle="PILOT FIELD MANUAL" onClose={closePanel}><div className="controls-list">{controls.map(([key, label, desc]) => <div className="control" key={key}><kbd>{key}</kbd><div><strong>{label}</strong><p>{desc}</p></div></div>)}</div><div className="guide-tip"><Mark /><p><strong>撃破が、次の推進力になる。</strong><br />敵を倒すとブリンクが回復し、各スキルの待機時間が短縮。緑のゲートでブースト補給。</p></div></Modal>}
     <div className="mobile-note">PCのキーボードとマウスでプレイしてください。</div>
   </main>
 }

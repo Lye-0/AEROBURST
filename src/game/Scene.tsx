@@ -2,7 +2,10 @@ import { memo, useEffect, useMemo, useRef } from 'react'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { CapsuleCollider, CuboidCollider, CylinderCollider, Physics, RigidBody, useBeforePhysicsStep, useRapier, type RapierRigidBody } from '@react-three/rapier'
 import * as THREE from 'three'
-import { game } from './core'
+import { game, viewDirection } from './core'
+import { World } from './Landscape'
+import { SkillEffects } from './SkillEffects'
+import { SPAWN } from './world'
 
 const ivory = '#e9efdf'
 const dark = '#163c49'
@@ -30,7 +33,7 @@ function Pilot() {
     const p = game.player
     const title = game.mode === 'title'
     const t = clock.elapsedTime
-    group.current.position.set(title ? 4.5 : p.x, title ? 2.65 : p.y, title ? 7 : p.z)
+    group.current.position.set(title ? 4.5 : p.x, title ? 2.65 : p.y, title ? SPAWN.z - 2 : p.z)
     group.current.scale.setScalar(title ? 2.3 : 1)
     group.current.rotation.y = title ? 0.6 : p.yaw
     const speed = title ? 0 : Math.hypot(p.vx, p.vz)
@@ -38,10 +41,10 @@ function Pilot() {
     leftLeg.current.rotation.x = p.grounded ? walk : -0.5
     rightLeg.current.rotation.x = p.grounded ? -walk : 0.45
     torso.current.rotation.z = title ? Math.sin(t * 1.3) * 0.025 : game.slash > 0 ? Math.sin(game.slash * 20) * 0.2 : 0
-    torso.current.rotation.x = game.dashTime > 0 ? 0.8 : 0
+    torso.current.rotation.x = game.dashTime > 0 || game.boosting ? 0.7 : 0
     arm.current.rotation.x = game.slash > 0 ? -1.5 + Math.sin(game.slash * 23) * 1.6 : -0.25
     arm.current.rotation.z = game.slash > 0 ? -0.9 : -0.12
-    thrusters.current.scale.set(1, game.dashTime > 0 ? 3 : 0.7 + Math.sin(t * 35) * 0.2, 1)
+    thrusters.current.scale.set(1, game.dashTime > 0 || game.boosting ? 4 : 0.7 + Math.sin(t * 35) * 0.2, 1)
     group.current.visible = !(game.invincible > 0 && game.damageFlash > 0 && Math.floor(t * 18) % 2)
   })
   return <group ref={group}>
@@ -86,70 +89,6 @@ function Pilot() {
   </group>
 }
 
-const platforms = [
-  { x: -17, z: -14, w: 8, d: 6, h: 2.4 },
-  { x: 17, z: -14, w: 8, d: 6, h: 2.4 },
-  { x: 0, z: -24, w: 10, d: 5, h: 4 },
-]
-
-function Arena() {
-  const buildings = useMemo(() => Array.from({ length: 55 }, (_, i) => {
-    const a = i * 2.39996
-    const r = 49 + (i % 6) * 16
-    return { x: Math.cos(a) * r, z: Math.sin(a) * r, h: 10 + ((i * 17) % 37), w: 3 + i % 5, angle: a }
-  }), [])
-  return <group>
-    <RigidBody type="fixed" colliders={false}>
-      <CylinderCollider args={[0.65, 31]} position={[0, -0.65, 0]} />
-      <mesh position={[0, -0.65, 0]} receiveShadow>
-        <cylinderGeometry args={[31, 30, 1.3, 96]} /><meshStandardMaterial color="#d0e0de" roughness={0.85} metalness={0.15} />
-      </mesh>
-      {platforms.map((p, i) => <group key={i}>
-        <CuboidCollider args={[p.w / 2, p.h / 2, p.d / 2]} position={[p.x, p.h / 2, p.z]} />
-        <Box position={[p.x, p.h / 2, p.z]} scale={[p.w, p.h, p.d]} color="#d9e8e5" />
-        <Box position={[p.x, p.h + 0.03, p.z]} scale={[p.w - 0.2, 0.07, 0.2]} color="#54bcc6" glow />
-      </group>)}
-    </RigidBody>
-    <mesh position={[0, -2, 0]}><cylinderGeometry args={[28, 23, 2, 12]} /><meshStandardMaterial color={dark} roughness={0.75} /></mesh>
-    <mesh position={[0, -4.8, 0]}><cylinderGeometry args={[21, 13, 4, 12]} /><meshStandardMaterial color="#819eaa" /></mesh>
-    {[6, 17, 29.5, 30.6].map((radius, i) => <mesh key={radius} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.025 + i * 0.001, 0]}>
-      <ringGeometry args={[radius, radius + (i > 1 ? 0.16 : 0.08), 96]} /><meshBasicMaterial color={i > 1 ? '#85aaab' : '#afc6c5'} />
-    </mesh>)}
-    {Array.from({ length: 12 }, (_, i) => <group key={i} rotation={[0, i * Math.PI / 6, 0]}>
-      <Box position={[0, 0.02, 22.5]} scale={[0.055, 0.025, 14]} color="#aec8c9" />
-      <Box position={[0, 0.03, 29.8]} scale={[2.3, 0.035, 0.45]} color={i % 3 === 0 ? '#ec8858' : '#93b4b7'} />
-    </group>)}
-    {[-20, 20].map(x => <group key={x} position={[x, 0.04, 0]}>
-      <mesh rotation={[-Math.PI / 2, 0, 0]}><circleGeometry args={[2.15, 32]} /><meshBasicMaterial color="#204a52" /></mesh>
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.01, 0]}><ringGeometry args={[1.75, 2, 32]} /><meshBasicMaterial color="#9cffa7" /></mesh>
-      <Box position={[0, 0.015, 0]} scale={[0.15, 0.025, 2]} color="#9cffa7" glow />
-      <Box position={[0, 0.018, 0]} scale={[2, 0.025, 0.15]} color="#9cffa7" glow />
-    </group>)}
-    {Array.from({ length: 8 }, (_, i) => {
-      const a = i * Math.PI / 4, x = Math.sin(a) * 32, z = Math.cos(a) * 32
-      return <group key={i} position={[x, 0, z]} rotation={[0, a, 0]}>
-        <Box position={[0, 2, 0]} scale={[1, 6, 1.5]} color={dark} />
-        <Box position={[0, 5.2, 0]} scale={[0.75, 0.6, 1.1]} color="#e9fff9" glow />
-        <Box position={[0, 2.5, -0.78]} scale={[0.16, 2.8, 0.06]} color={cyan} glow />
-      </group>
-    })}
-    {buildings.map((b, i) => <group key={i} position={[b.x, -12, b.z]} rotation={[0, b.angle, 0]}>
-      <Box position={[0, b.h / 2 - 5, 0]} scale={[b.w, b.h, b.w * 1.3]} color={i % 3 ? '#bfd4dc' : '#91b3c4'} />
-      <Box position={[b.w * 0.2, b.h - 5, 0]} scale={[b.w * 0.55, 1, b.w]} color="#e9f0e9" />
-      <Box position={[b.w * 0.51, b.h / 2, 0]} scale={[0.05, b.h * 0.8, 0.18]} color="#e0fcf8" glow />
-    </group>)}
-    <group position={[0, 7, -62]}>
-      <mesh rotation={[0, 0.22, 0]}><torusGeometry args={[18, 1.2, 8, 72]} /><meshStandardMaterial color="#e1eee9" metalness={0.35} roughness={0.5} /></mesh>
-      <mesh rotation={[0, 0.22, 0]} position={[0, 0, 0.5]}><torusGeometry args={[16.6, 0.12, 6, 72]} /><meshBasicMaterial color="#a2f5ec" /></mesh>
-      <Box position={[-12, -16, 0]} scale={[2.5, 25, 3]} color="#a2bcc6" />
-      <Box position={[12, -16, 0]} scale={[2.5, 25, 3]} color="#a2bcc6" />
-    </group>
-    {Array.from({ length: 24 }, (_, i) => <mesh key={i} position={[Math.sin(i * 2.4) * (30 + i * 4), -12 - i % 3 * 2, Math.cos(i * 2.4) * (30 + i * 4)]} scale={[18 + i % 4 * 5, 2.5, 12 + i % 4 * 5]}>
-      <sphereGeometry args={[1, 12, 8]} /><meshStandardMaterial color="#eff7f5" transparent opacity={0.75} roughness={1} depthWrite={false} />
-    </mesh>)}
-  </group>
-}
-
 function EnemyModel({ index }: { index: number }) {
   const group = useRef<THREE.Group>(null!)
   const body = useRef<THREE.Group>(null!)
@@ -161,23 +100,24 @@ function EnemyModel({ index }: { index: number }) {
   const cannon = useRef<THREE.Group>(null!)
   useFrame(({ clock }) => {
     const e = game.enemies[index]
-    group.current.visible = e.active
+    group.current.visible = e.active && Math.hypot(e.x - game.player.x, e.z - game.player.z) < 190
     if (!e.active) return
     group.current.position.set(e.x, e.y, e.z)
     body.current.rotation.y = e.yaw
     body.current.rotation.z = e.flash > 0 ? Math.sin(clock.elapsedTime * 70) * 0.15 : 0
-    striker.current.visible = e.kind === 'striker' || e.kind === 'gunner'
-    striker.current.scale.setScalar(e.kind === 'gunner' ? 1.15 : 1)
+    striker.current.visible = e.kind === 'striker' || e.kind === 'gunner' || e.kind === 'brute'
+    striker.current.scale.setScalar(e.kind === 'brute' ? 1.65 : e.kind === 'gunner' ? 1.15 : 1)
     cannon.current.visible = e.kind === 'gunner'
     drone.current.visible = e.kind === 'drone'
     drone.current.rotation.z = Math.sin(clock.elapsedTime * 2 + index) * 0.12
     boss.current.visible = e.kind === 'boss'
-    hp.current.position.y = e.kind === 'boss' ? 3.5 : 1.7
+    boss.current.scale.setScalar(1.5)
+    hp.current.position.y = e.kind === 'boss' ? 5 : e.kind === 'brute' ? 2.5 : 1.7
     hp.current.scale.x = Math.max(0.01, e.hp / e.maxHp) * (e.kind === 'boss' ? 3 : 1.5)
     hp.current.quaternion.copy(gameCameraQuaternion)
     warning.current.visible = e.phase === 'windup'
     warning.current.position.y = -e.y + 0.06
-    const size = e.kind === 'boss' ? (e.attack % 3 === 1 ? 10 : 6) : e.kind === 'striker' ? 3.5 : 1.8
+    const size = e.kind === 'boss' ? (e.attack % 4 === 1 ? 24 : 10) : e.kind === 'brute' ? 8 : e.kind === 'striker' ? 4 : 2
     warning.current.scale.setScalar(size * (1 - e.timer * 0.12))
     ;(warning.current.material as THREE.MeshBasicMaterial).opacity = 0.25 + (1 - e.timer) * 0.3
   })
@@ -243,12 +183,14 @@ function Effects() {
     game.shots.forEach((s, i) => {
       temp.position.set(s.x, s.y, s.z); temp.rotation.set(0, 0, 0); temp.scale.setScalar(s.active ? 0.23 : 0)
       temp.updateMatrix(); shots.current.setMatrixAt(i, temp.matrix)
+      shots.current.setColorAt(i, color.set(s.friendly ? '#bceaff' : '#ff733a'))
     })
     shots.current.instanceMatrix.needsUpdate = true
+    if (shots.current.instanceColor) shots.current.instanceColor.needsUpdate = true
     slash.current.visible = game.slash > 0
     slash.current.position.set(game.player.x, game.player.y + 0.1, game.player.z)
     slash.current.rotation.set(game.slashType ? 0.3 : -Math.PI / 2 + 0.15, game.player.yaw, game.slashSerial % 2 ? 0.4 : 2.5)
-    slash.current.scale.setScalar(1 + (0.25 - game.slash) * 3)
+    slash.current.scale.setScalar(1.6 + (0.25 - game.slash) * 4)
     ;(slash.current.material as THREE.MeshBasicMaterial).opacity = Math.min(0.8, game.slash * 4)
     burst.current.visible = game.burst > 0 || game.slam > 0
     burst.current.position.set(game.burstOrigin.x, game.burstOrigin.y, game.burstOrigin.z)
@@ -259,8 +201,8 @@ function Effects() {
     if (e?.active) { target.current.position.set(e.x, e.y, e.z); target.current.quaternion.copy(camera.quaternion) }
   })
   return <>
-    <instancedMesh ref={particles} args={[undefined, undefined, 200]} frustumCulled={false}><boxGeometry /><meshBasicMaterial toneMapped={false} /></instancedMesh>
-    <instancedMesh ref={shots} args={[undefined, undefined, 40]} frustumCulled={false}><octahedronGeometry /><meshBasicMaterial color="#ff5727" toneMapped={false} /></instancedMesh>
+    <instancedMesh ref={particles} args={[undefined, undefined, game.particles.length]} frustumCulled={false}><boxGeometry /><meshBasicMaterial toneMapped={false} /></instancedMesh>
+    <instancedMesh ref={shots} args={[undefined, undefined, game.shots.length]} frustumCulled={false}><octahedronGeometry /><meshBasicMaterial toneMapped={false} /></instancedMesh>
     <mesh ref={slash} visible={false}><ringGeometry args={[2.2, 2.65, 32, 1, 0, Math.PI * 1.4]} /><meshBasicMaterial color="#b0fffa" transparent opacity={0.7} side={THREE.DoubleSide} depthWrite={false} toneMapped={false} /></mesh>
     <mesh ref={burst} visible={false} rotation={[-Math.PI / 2, 0, 0]}><torusGeometry args={[1, 0.03, 8, 64]} /><meshBasicMaterial color="#b3fff3" transparent depthWrite={false} toneMapped={false} /></mesh>
     <group ref={target}>
@@ -298,17 +240,18 @@ function Controller({ onReady }: { onReady: () => void }) {
   })
   const cameraPosition = useMemo(() => new THREE.Vector3(), [])
   const targetPosition = useMemo(() => new THREE.Vector3(), [])
+  const actualDirection = useMemo(() => new THREE.Vector3(), [])
   useFrame((_, dt) => {
     const p = game.player
     if (game.mode === 'title') {
-      cameraPosition.set(12, 7, 22)
-      targetPosition.set(-3.5, 2, 6)
+      cameraPosition.set(12, 7, SPAWN.z + 14)
+      targetPosition.set(-3.5, 2, SPAWN.z - 3)
     } else {
-      const radius = 8.5 + (game.dashTime > 0 ? 1 : 0)
+      const radius = 10.5 + (game.dashTime > 0 || game.boosting ? 2 : 0)
       const horizontal = Math.cos(game.cameraPitch) * radius
-      cameraPosition.set(p.x + Math.sin(game.cameraYaw) * horizontal, p.y + 1.8 + Math.sin(game.cameraPitch) * radius, p.z + Math.cos(game.cameraYaw) * horizontal)
+      cameraPosition.set(p.x + Math.sin(game.cameraYaw) * horizontal, p.y + 1.8 + Math.max(0, Math.sin(game.cameraPitch)) * radius, p.z + Math.cos(game.cameraYaw) * horizontal)
       cameraPosition.y = Math.max(cameraPosition.y, 1.2)
-      targetPosition.set(p.x, p.y + 1, p.z)
+      targetPosition.set(p.x, p.y + 1.2, p.z)
       const cameraDirection = cameraPosition.clone().sub(targetPosition)
       const cameraDistance = cameraDirection.length()
       cameraDirection.normalize()
@@ -320,37 +263,49 @@ function Controller({ onReady }: { onReady: () => void }) {
         cameraPosition.y += (Math.random() - 0.5) * game.shake * 0.45
       }
     }
-    camera.position.lerp(cameraPosition, 1 - Math.exp(-8 * Math.min(dt, 0.05)))
+    if (camera.position.distanceTo(cameraPosition) > 90) camera.position.copy(cameraPosition)
+    else camera.position.lerp(cameraPosition, 1 - Math.exp(-12 * Math.min(dt, 0.05)))
+    if (game.mode !== 'title') {
+      const aim = viewDirection(game.cameraYaw, game.cameraPitch)
+      targetPosition.set(camera.position.x + aim.x * 100, camera.position.y + aim.y * 100, camera.position.z + aim.z * 100)
+    }
     camera.lookAt(targetPosition)
+    if (game.mode === 'playing') { camera.getWorldDirection(actualDirection); game.aimDirection = { x: actualDirection.x, y: actualDirection.y, z: actualDirection.z } }
     gameCameraQuaternion.copy(camera.quaternion)
     const perspective = camera as THREE.PerspectiveCamera
-    const fov = game.mode === 'title' ? 46 : game.dashTime > 0 ? 79 : 65
+    const fov = game.mode === 'title' ? 46 : game.dashTime > 0 || game.boosting ? 86 : game.overdrive > 0 ? 77 : 69
     perspective.fov += (fov - perspective.fov) * Math.min(1, dt * 8)
     perspective.updateProjectionMatrix()
     const canvas = gl.domElement
     if (game.mode !== 'playing' && document.pointerLockElement === canvas) document.exitPointerLock()
   })
-  return <RigidBody ref={rigidBody} type="kinematicPosition" colliders={false} position={[0, 1.15, 9]} enabledRotations={[false, false, false]}>
+  return <RigidBody ref={rigidBody} type="kinematicPosition" colliders={false} position={[SPAWN.x, SPAWN.y, SPAWN.z]} enabledRotations={[false, false, false]}>
     <CapsuleCollider args={[0.65, 0.45]} />
   </RigidBody>
 }
 
+function SunLight({ shadows }: { shadows: boolean }) {
+  const light = useRef<THREE.DirectionalLight>(null!)
+  useFrame(() => { const p = game.player; light.current.position.set(p.x - 30, p.y + 65, p.z + 30); light.current.target.position.set(p.x, 0, p.z); light.current.target.updateMatrixWorld() })
+  return <directionalLight ref={light} intensity={3.1} color="#fff4d3" castShadow={shadows} shadow-mapSize={[2048, 2048]}
+    shadow-camera-left={-65} shadow-camera-right={65} shadow-camera-top={65} shadow-camera-bottom={-65}
+    shadow-camera-near={1} shadow-camera-far={180} shadow-bias={-0.0003} shadow-normalBias={0.06} />
+}
+
 export const Scene = memo(function Scene({ onReady, quality }: { onReady: () => void; quality: 'high' | 'low' }) {
   return <Canvas shadows={quality === 'high'} dpr={quality === 'high' ? [1, 1.5] : 1}
-    camera={{ position: [12, 7, 22], fov: 46, near: 0.1, far: 300 }}
+    camera={{ position: [12, 7, SPAWN.z + 14], fov: 46, near: 0.1, far: 1600 }}
     gl={{ antialias: quality === 'high', alpha: false, powerPreference: 'high-performance' }}
     onCreated={({ gl }) => { gl.toneMapping = THREE.ACESFilmicToneMapping; gl.toneMappingExposure = 1.15 }}>
-    <color attach="background" args={['#b8d9e8']} />
-    <fog attach="fog" args={['#c9e2eb', 45, 170]} />
-    <hemisphereLight args={['#e6f8ff', '#6896a0', 2.2]} />
-    <directionalLight position={[20, 35, 15]} intensity={3} color="#fff5d6" castShadow={quality === 'high'}
-      shadow-mapSize={[2048, 2048]} shadow-camera-left={-38} shadow-camera-right={38} shadow-camera-top={38} shadow-camera-bottom={-38}
-      shadow-camera-near={1} shadow-camera-far={90} shadow-bias={-0.0005} shadow-normalBias={0.045} />
+    <color attach="background" args={['#a9d5df']} />
+    <fog attach="fog" args={['#c4e0de', 250, 1150]} />
+    <hemisphereLight args={['#e4f8ff', '#779a79', 1.8]} />
+    <SunLight shadows={quality === 'high'} />
     <Physics timeStep={1 / 60} gravity={[0, -27, 0]} interpolate>
-      <Arena /><Controller onReady={onReady} />
+      <World /><Controller onReady={onReady} />
     </Physics>
     <Pilot />
     {game.enemies.map(e => <EnemyModel key={e.id} index={e.id} />)}
-    <Effects />
+    <Effects /><SkillEffects />
   </Canvas>
 })
