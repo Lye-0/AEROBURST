@@ -8,5 +8,6 @@ import '@fontsource/barlow-condensed/latin-900-italic.css'
 import '@fontsource-variable/noto-sans-jp'
 import './styles.css'
 import './frontier.css'
+import './biomes.css'
 
 createRoot(document.getElementById('root')!).render(<App />)

@@ -1,9 +1,11 @@
 import { GameAudio } from './audio'
 import { BOOST_GATES, CACHES, DISTRICTS, FIELD, LAUNCH_PADS, SPAWN, inField } from './world'
+import { BIOMES, RESONATORS, UPDRAFTS, environmentAt, type Environment } from './biomes'
+import { attackPattern, hazardTouches, type Hazard, type HazardSpec } from './encounters'
 
 export type V3 = { x: number; y: number; z: number }
 export type Mode = 'title' | 'playing' | 'paused' | 'won' | 'lost'
-export type EnemyKind = 'striker' | 'gunner' | 'drone' | 'brute' | 'boss'
+export type EnemyKind = 'striker' | 'gunner' | 'drone' | 'brute' | 'specialist' | 'warden' | 'boss'
 export type Skill = 'grapple' | 'cyclone' | 'lance' | 'aegis' | 'drones' | 'overdrive'
 export const SKILLS: { id: Skill; key: string; name: string; short: string; cooldown: number; color: string; description: string }[] = [
   { id: 'grapple', key: 'F', name: 'グラップル', short: 'GRAPPLE', cooldown: 3, color: '#a5f5ce', description: '70m先の敵へワイヤーで急接近し、追撃する。' },
@@ -19,7 +21,7 @@ export type Enemy = V3 & {
   yaw: number; vy: number; attack: number; aim: V3; enraged: boolean
 }
 export type Particle = V3 & { vx: number; vy: number; vz: number; life: number; maxLife: number; color: string; size: number }
-export type Shot = V3 & { active: boolean; vx: number; vy: number; vz: number; life: number; friendly: boolean }
+export type Shot = V3 & { active: boolean; vx: number; vy: number; vz: number; life: number; friendly: boolean; damage: number; homing: boolean; color: string }
 export type Effect = { kind: 'ring' | 'beam' | 'blast'; start: V3; end: V3; life: number; duration: number; color: string; radius: number }
 export type ZoneState = { state: 'dormant' | 'combat' | 'cleared' | 'locked'; formation: number; delay: number }
 export type Settings = { volume: number; sensitivity: number; shake: boolean; flashes: boolean; quality: 'high' | 'low' }
@@ -29,6 +31,9 @@ export type Snapshot = {
   message: string; messageSub: string; bossHp: number; bossMaxHp: number; best: number; locked: boolean;
   objective: number; objectiveDistance: number; cleared: number; speed: number; cooldowns: Record<Skill, number>;
   overdrive: number; collected: number; skillNotice: string; zones: ZoneState[]; boosting: boolean; bossAttack: string;
+  environment: Environment; wardenHp: number; wardenMaxHp: number; wardenName: string; wardenHint: string;
+  buffs: { name: string; time: number }[]; resonances: number;
+  blinkInterval: number;
 }
 export type CollisionResolver = (position: V3, movement: V3) => { position: V3; grounded: boolean }
 export const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n))
@@ -121,6 +126,15 @@ export class Game {
   grappleTime = 0
   private cyclonePulse = 0
   private dronePulse = 0
+  environment = environmentAt(SPAWN.x, SPAWN.z, 0)
+  tailwind = 0
+  regeneration = 0
+  armor = 0
+  resonances = 0
+  resonatorCooldowns = RESONATORS.map(() => 0)
+  private weatherTimer = 3
+  private previousBiome = 0
+  private hazardCursor = 0
   readonly keys = new Set<string>()
   readonly actions: string[] = []
   readonly audio = new GameAudio()
@@ -129,7 +143,8 @@ export class Game {
     timer: 0, phase: 'approach', stun: 0, flash: 0, yaw: 0, vy: 0, attack: 0, aim: { x: 0, y: 0, z: 0 }, enraged: false,
   }))
   readonly particles: Particle[] = Array.from({ length: 480 }, () => ({ x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, life: 0, maxLife: 1, color: '#7df3df', size: 0.1 }))
-  readonly shots: Shot[] = Array.from({ length: 96 }, () => ({ x: 0, y: 0, z: 0, active: false, vx: 0, vy: 0, vz: 0, life: 0, friendly: false }))
+  readonly shots: Shot[] = Array.from({ length: 96 }, () => ({ x: 0, y: 0, z: 0, active: false, vx: 0, vy: 0, vz: 0, life: 0, friendly: false, damage: 14, homing: false, color: '#ff733a' }))
+  readonly hazards: Hazard[] = Array.from({ length: 48 }, () => ({ active: false, kind: 'spores', zone: 0, start: { x: 0, y: 0, z: 0 }, end: { x: 0, y: 0, z: 0 }, radius: 1, warning: 1, duration: 1, damage: 0, elapsed: 0, nextHit: 0 }))
   readonly effects: Effect[] = Array.from({ length: 48 }, () => ({ kind: 'ring', start: { x: 0, y: 0, z: 0 }, end: { x: 0, y: 0, z: 0 }, life: 0, duration: 1, color: '#9ffff3', radius: 1 }))
   private particleCursor = 0
   private effectCursor = 0
@@ -142,6 +157,7 @@ export class Game {
   getSnapshot = () => this.snapshot
   publish() {
     const boss = this.enemies.find(e => e.active && e.kind === 'boss')
+    const warden = this.enemies.find(e => e.active && e.kind === 'warden' && distance(e, this.player) < 120)
     this.snapshot = {
       mode: this.mode, hp: this.hp, maxHp: this.maxHp, energy: this.energy, dashes: this.dashes, dashCharge: this.dashCharge, fuel: this.fuel,
       combo: this.combo, maxCombo: this.maxCombo, score: this.score, kills: this.kills, wave: this.wave,
@@ -152,6 +168,11 @@ export class Game {
       cooldowns: { ...this.cooldowns }, overdrive: this.overdrive, collected: this.collected.size,
       skillNotice: this.skillNotice, zones: this.zones.map(z => ({ ...z })), boosting: this.boosting,
       bossAttack: boss?.phase === 'windup' ? ['拡散砲 — 横へブリンク', '衝撃波 — ジャンプで回避', '突進 — 横へ回避', '全方位弾 — イージスで反射'][boss.attack % 4] : '',
+      environment: { ...this.environment }, wardenHp: warden?.hp ?? 0, wardenMaxHp: warden?.maxHp ?? 0,
+      wardenName: warden ? BIOMES[warden.zone].warden : '',
+      wardenHint: warden ? warden.phase === 'recover' ? 'コア露出 — 攻撃のチャンス' : BIOMES[warden.zone].hint : '',
+      buffs: [{ name: '追い風', time: this.tailwind }, { name: '再生', time: this.regeneration }, { name: '重装', time: this.armor }].filter(b => b.time > 0), resonances: this.resonances,
+      blinkInterval: this.zones[0].state === 'cleared' ? .55 : .75,
     }
     this.listeners.forEach(l => l())
   }
@@ -165,6 +186,8 @@ export class Game {
     this.combo = this.comboTime = this.maxCombo = this.score = this.kills = this.time = 0
     this.objective = 0; this.selectedObjective = null; this.wave = 1; this.pendingSlam = false; this.slam = 0
     this.cooldowns = freshCooldowns(); this.zones = freshZones(); this.collected.clear()
+    this.environment = environmentAt(SPAWN.x, SPAWN.z, 0); this.previousBiome = 0; this.weatherTimer = 3
+    this.tailwind = this.regeneration = this.armor = this.resonances = 0; this.resonatorCooldowns.fill(0); this.hazards.forEach(h => { h.active = false })
     this.cyclone = this.shield = this.droneTime = this.overdrive = this.grappleTime = this.boostHeld = this.gateBoost = this.gateCooldown = 0
     this.grappleTarget = -1; this.boosting = false; this.boostExhausted = false; this.skillNotice = ''; this.skillNoticeTime = 0
     this.enemies.forEach(e => { e.active = false }); this.shots.forEach(s => { s.active = false })
@@ -178,6 +201,7 @@ export class Game {
     this.mode = 'title'; this.keys.clear(); this.actions.length = 0
     this.enemies.forEach(e => { e.active = false }); this.shots.forEach(s => { s.active = false }); this.particles.forEach(p => { p.life = 0 }); this.effects.forEach(e => { e.life = 0 })
     this.slash = this.burst = this.cyclone = this.shield = this.droneTime = this.overdrive = this.slam = 0
+    this.hazards.forEach(h => { h.active = false }); this.tailwind = this.regeneration = this.armor = 0
     Object.assign(this.player, { ...SPAWN, yaw: Math.PI }); this.publish()
   }
   action(action: string) { if (this.mode === 'playing' && this.actions.length < 20) this.actions.push(action) }
@@ -191,11 +215,11 @@ export class Game {
     const d = DISTRICTS[id], zone = this.zones[id], slots = this.enemies.filter(e => !e.active)
     if (slots.length < d.count) return false
     for (let i = 0; i < d.count; i++) {
-      const kind: EnemyKind = id === 5 && i === 0 ? 'boss' : i % 8 === 7 ? 'brute' : i % 5 === 3 ? 'drone' : i % 4 === 2 ? 'gunner' : 'striker'
-      const hp = kind === 'boss' ? 4200 : kind === 'brute' ? 240 : kind === 'gunner' ? 100 : kind === 'drone' ? 65 : 80
+      const kind: EnemyKind = id === 5 && i === 0 ? 'boss' : id < 5 && zone.formation === d.waves && i === 0 ? 'warden' : i % 5 === 1 ? 'specialist' : i % 8 === 7 ? 'brute' : i % 5 === 3 ? 'drone' : i % 4 === 2 ? 'gunner' : 'striker'
+      const hp = kind === 'boss' ? 5600 : kind === 'warden' ? 1100 + id * 140 : kind === 'brute' ? 330 : kind === 'specialist' ? 190 : kind === 'gunner' ? 140 : kind === 'drone' ? 95 : 110
       const a = i / d.count * Math.PI * 2 + zone.formation * 0.8, r = kind === 'boss' ? 0 : 15 + i % 3 * 6
       Object.assign(slots[i], { active: true, kind, zone: id, x: d.x + Math.sin(a) * r, z: d.z + Math.cos(a) * r,
-        y: kind === 'drone' ? 6 : kind === 'boss' ? 3.8 : kind === 'brute' ? 1.8 : 1.15,
+        y: kind === 'drone' ? 6 : kind === 'boss' ? 3.8 : kind === 'warden' ? 2.9 : kind === 'brute' ? 1.8 : 1.15,
         hp, maxHp: hp, timer: 1.2 + (i % 6) * 0.15, phase: 'approach', stun: 0, flash: 0, vy: 0, attack: 0, enraged: false })
     }
     return true
@@ -210,12 +234,13 @@ export class Game {
       if (z.delay < 1.6) continue
       if (z.formation < d.waves) {
         if (this.enemies.filter(e => !e.active).length < d.count) continue
-        z.formation++; z.delay = 0; this.spawnFormation(d.id); this.announce('REINFORCEMENTS', d.name + ' / 最終防衛部隊', 2)
+        z.formation++; z.delay = 0; this.spawnFormation(d.id); this.announce('WARDEN INBOUND', BIOMES[d.id].warden + ' — 攻撃後のコア露出を狙え。', 3)
       } else {
         z.state = 'cleared'; this.score += 2500; this.maxHp += 15; this.hp = this.maxHp; this.fuel = 100
         this.checkpoint = { x: d.x, y: 2, z: d.z + 12 }
         this.effect('blast', { x: d.x, y: 5, z: d.z }, '#b7ffbd', 55, 1.4)
-        this.announce('CORE LIBERATED', d.name + ' 解放 — 最大耐久 +15 / 次の中枢へ', 4); this.audio.play('wave')
+        this.hazards.forEach(h => { if (h.zone === d.id) h.active = false })
+        this.announce('CORE LIBERATED', d.name + ' 解放 — ' + BIOMES[d.id].boon, 4); this.audio.play('wave')
         if (d.id === 5) { this.finish(true); return }
         if (this.selectedObjective === d.id) this.selectedObjective = null
         if (this.zones.slice(0, 5).every(v => v.state === 'cleared')) { this.zones[5].state = 'dormant'; this.selectedObjective = 5; this.announce('THE SKY THRONE', '全中枢を解放。北の王座で最終決戦へ。', 5) }
@@ -249,16 +274,17 @@ export class Game {
   }
   damageEnemy(e: Enemy, amount: number, launch = false) {
     if (!e.active) return
-    const damage = amount * (this.overdrive > 0 ? 1.65 : 1)
-    e.hp -= damage; e.flash = 0.13; e.stun = e.kind === 'boss' ? 0 : e.kind === 'brute' ? 0.12 : 0.4
-    if (launch && e.kind !== 'boss') e.vy = 17
-    this.combo++; this.comboTime = 9; this.maxCombo = Math.max(this.maxCombo, this.combo); this.energy = clamp(this.energy + 2.5, 0, 100)
+    const elite = e.kind === 'boss' || e.kind === 'warden'
+    const damage = amount * (this.overdrive > 0 ? 1.65 : 1) * (e.kind === 'warden' ? e.phase === 'recover' ? 1.3 : .68 : 1)
+    e.hp -= damage; e.flash = 0.13; e.stun = elite ? 0 : e.kind === 'brute' ? 0.06 : .12
+    if (launch && !elite) e.vy = 17
+    this.combo++; this.comboTime = 9; this.maxCombo = Math.max(this.maxCombo, this.combo); this.energy = clamp(this.energy + (this.zones[4].state === 'cleared' ? 3.2 : 2.5), 0, 100)
     this.score += Math.round(damage * (1 + Math.min(this.combo, 100) * 0.025)); this.shake = Math.max(this.shake, 0.12); this.hitstop = Math.max(this.hitstop, 0.027)
     this.emit(e, '#fff1b0', 5); this.audio.play('hit')
     if (e.hp <= 0) {
-      e.active = false; this.kills++; this.score += e.kind === 'boss' ? 8000 : e.kind === 'brute' ? 400 : 150
+      e.active = false; this.kills++; this.score += e.kind === 'boss' ? 8000 : e.kind === 'warden' ? 3000 : e.kind === 'brute' ? 400 : 150
       this.dashes = 3; this.dashCharge = 0; this.fuel = clamp(this.fuel + 14, 0, 100); this.energy = clamp(this.energy + 5, 0, 100)
-      this.hp = clamp(this.hp + 3, 0, this.maxHp); this.player.jumps = Math.min(this.player.jumps, 1)
+      this.hp = clamp(this.hp + (this.zones[1].state === 'cleared' ? 5 : 3), 0, this.maxHp); this.player.jumps = Math.min(this.player.jumps, 1)
       for (const skill of SKILLS) this.cooldowns[skill.id] = Math.max(0, this.cooldowns[skill.id] - 0.4)
       if (!this.player.grounded) this.player.vy = Math.max(this.player.vy, 4)
       this.emit(e, '#ff9871', e.kind === 'boss' ? 100 : 22, 22); this.effect('blast', e, '#ffd5a2', e.kind === 'boss' ? 24 : 3.5, 0.5); this.audio.play('kill')
@@ -334,7 +360,7 @@ export class Game {
       for (const e of this.enemies) if (e.active && distance(e, this.player) < 13) this.damageEnemy(e, 55)
       this.audio.play('shield'); return
     }
-    this.hp = Math.max(0, this.hp - damage); this.invincible = 0.75; this.combo = Math.floor(this.combo * 0.7); this.damageFlash = 0.4; this.shake = 0.3
+    this.hp = Math.max(0, this.hp - damage * (this.armor > 0 ? .5 : 1)); this.invincible = 0.65; this.combo = Math.floor(this.combo * 0.7); this.damageFlash = 0.4; this.shake = 0.3
     this.audio.play('hurt'); this.emit(this.player, '#ff8563', 10); if (this.hp <= 0) this.finish(false)
   }
   finish(won: boolean) {
@@ -345,33 +371,97 @@ export class Game {
   fire(e: Enemy, offset = 0) {
     const s = this.shots.find(s => !s.active); if (!s) return
     const dx = e.aim.x - e.x, dy = e.aim.y - e.y, dz = e.aim.z - e.z, length = Math.hypot(dx, dy, dz) || 1
-    const speed = e.kind === 'boss' ? 25 : 18, angle = Math.atan2(dx, dz) + offset
-    Object.assign(s, { active: true, x: e.x, y: e.y, z: e.z, vx: Math.sin(angle) * speed, vy: dy / length * speed, vz: Math.cos(angle) * speed, life: 5, friendly: false })
+    const speed = e.kind === 'boss' ? 29 : e.zone === 3 ? 16 : 23, angle = Math.atan2(dx, dz) + offset
+    Object.assign(s, { active: true, x: e.x, y: e.y, z: e.z, vx: Math.sin(angle) * speed, vy: dy / length * speed, vz: Math.cos(angle) * speed,
+      life: 5, friendly: false, damage: e.kind === 'boss' ? 19 : 14, homing: e.zone === 3, color: BIOMES[e.zone].color })
+  }
+  queueHazard(spec: HazardSpec) {
+    Object.assign(this.hazards[this.hazardCursor++ % this.hazards.length], spec, { active: true, elapsed: 0, nextHit: 0 })
+  }
+  regionalAttack(e: Enemy) {
+    for (const hazard of attackPattern(e.zone, e, e.aim, e.kind === 'warden' || e.kind === 'boss', e.attack++)) this.queueHazard(hazard)
+    if (e.zone === 3) { this.fire(e, -.15); this.fire(e, .15) }
+  }
+  consumeResonator(id: number) {
+    if (this.resonatorCooldowns[id] > 0) return false
+    const item = RESONATORS[id]; if (!item) return false
+    this.resonatorCooldowns[id] = 30; this.resonances++
+    if (item.zone === 0) { this.tailwind = 12; this.fuel = 100 }
+    if (item.zone === 1) { this.hp = Math.min(this.maxHp, this.hp + 30); this.regeneration = 8 }
+    if (item.zone === 2) this.armor = 10
+    if (item.zone === 3) for (const skill of SKILLS) this.cooldowns[skill.id] *= .5
+    if (item.zone === 4) { this.overdrive = Math.max(this.overdrive, 6); this.energy = clamp(this.energy + 20, 0, 100) }
+    if (item.zone === 5) { this.shield = Math.max(this.shield, 4); this.fuel = 100; this.dashes = 3 }
+    this.skillNotice = BIOMES[item.zone].item + ' / ' + BIOMES[item.zone].itemHint; this.skillNoticeTime = 3
+    this.effect('ring', item, BIOMES[item.zone].color, 7, .6); this.audio.play('wave'); return true
+  }
+  updateEnvironment(dt: number) {
+    const env = this.environment = environmentAt(this.player.x, this.player.z, this.time)
+    if (env.zone !== this.previousBiome) {
+      this.previousBiome = env.zone; this.weatherTimer = 3
+      if (env.zone >= 0) this.announce(BIOMES[env.zone].name, BIOMES[env.zone].rule, 3)
+    }
+    this.resonatorCooldowns = this.resonatorCooldowns.map(t => Math.max(0, t - dt))
+    for (const item of RESONATORS) if (distance(this.player, item) < 3) this.consumeResonator(item.id)
+    if (this.regeneration > 0) this.hp = Math.min(this.maxHp, this.hp + dt * 4)
+    if (env.zone >= 0 && env.weight > .6 && this.zones[env.zone].state !== 'cleared' && (this.weatherTimer -= dt) <= 0) {
+      this.weatherTimer = env.zone === 4 ? 4.5 : 8
+      const p = this.player, origin = DISTRICTS[env.zone]
+      if (env.zone === 4) this.queueHazard({ kind: 'lightning', zone: 4, start: { x: p.x, y: .15, z: p.z }, end: { x: p.x, y: 35, z: p.z }, radius: 5, warning: 1.35, duration: .35, damage: 24 })
+      if (env.zone === 5) this.queueHazard({ kind: 'shockwave', zone: 5, start: { x: origin.x, y: .15, z: origin.z }, end: { x: origin.x, y: 0, z: origin.z }, radius: 60, warning: 1.4, duration: 2.8, damage: 20 })
+    }
+  }
+  updateHazards(dt: number) {
+    const p = this.player
+    for (const h of this.hazards) {
+      if (!h.active) continue
+      h.elapsed += dt
+      if (h.elapsed > h.warning + h.duration) { h.active = false; continue }
+      if (h.elapsed < h.warning) continue
+      if (h.kind === 'well' && this.dashTime <= 0 && this.grappleTime <= 0) {
+        const d = Math.hypot(p.x - h.start.x, p.z - h.start.z)
+        if (d < h.radius && d > .5 && p.y < 30) {
+          const pull = 22 * (1 - d / h.radius)
+          p.vx += (h.start.x - p.x) / d * pull * dt * 16; p.vz += (h.start.z - p.z) / d * pull * dt * 16
+        }
+      }
+      if (h.elapsed >= h.nextHit && hazardTouches(h, p)) {
+        h.nextHit = h.elapsed + .8; this.hurt(h.damage)
+        if (h.kind === 'wind' && this.dashTime <= 0 && this.grappleTime <= 0 && this.shield <= 0) {
+          const dx = h.end.x - h.start.x, dz = h.end.z - h.start.z, len = Math.hypot(dx, dz) || 1
+          p.vx += dx / len * 18; p.vz += dz / len * 18; p.vy = Math.max(p.vy, 5)
+        }
+      }
+    }
   }
   updateEnemy(e: Enemy, dt: number) {
     if (!e.active) return
-    const p = this.player, boss = e.kind === 'boss', brute = e.kind === 'brute', floor = boss ? 3.8 : brute ? 1.8 : 1.15
+    const p = this.player, boss = e.kind === 'boss', brute = e.kind === 'brute', warden = e.kind === 'warden', specialist = e.kind === 'specialist', floor = boss ? 3.8 : warden ? 2.9 : brute ? 1.8 : 1.15
     e.flash = Math.max(0, e.flash - dt); e.stun = Math.max(0, e.stun - dt)
-    if (e.vy !== 0 || (e.kind !== 'drone' && e.y > floor)) { e.vy -= 24 * dt; e.y += e.vy * dt; if (e.y < floor) { e.y = floor; e.vy = 0 } }
+    if (e.vy !== 0 || (e.kind !== 'drone' && e.y > floor)) { e.vy -= 24 * environmentAt(e.x, e.z, this.time).gravity * dt; e.y += e.vy * dt; if (e.y < floor) { e.y = floor; e.vy = 0 } }
     if (e.stun > 0 || hdist(e, p) > 135) return
     if (boss && !e.enraged && e.hp < e.maxHp * 0.5) { e.enraged = true; this.announce('GUARDIAN / OVERLOAD', '第2形態 — 攻撃間隔短縮。イージスで弾幕を反射せよ。', 3); this.effect('blast', e, '#ff9e70', 30, 1) }
     e.timer -= dt * (e.enraged ? 1.4 : 1)
     const dx = p.x - e.x, dz = p.z - e.z, h = Math.hypot(dx, dz) || 0.01; e.yaw = Math.atan2(dx, dz)
     if (e.phase === 'approach') {
-      const preferred = e.kind === 'gunner' ? 23 : e.kind === 'drone' ? 14 : boss ? 10 : brute ? 5 : 3.4
-      if (h > preferred) { const speed = boss ? 7 : brute ? 5 : e.kind === 'striker' ? 8 : 4; e.x += dx / h * speed * dt; e.z += dz / h * speed * dt }
+      const preferred = specialist ? 26 : warden ? 17 : e.kind === 'gunner' ? 23 : e.kind === 'drone' ? 14 : boss ? 10 : brute ? 5 : 3.4
+      if (h > preferred) { const speed = boss || warden ? 8 : brute ? 6 : e.kind === 'striker' ? 10 : 5; e.x += dx / h * speed * dt; e.z += dz / h * speed * dt }
+      if ((e.kind === 'gunner' || specialist) && h < 12) { e.x -= dx / h * 5 * dt; e.z -= dz / h * 5 * dt }
+      if ((e.kind === 'gunner' || specialist) && h < 40) { const side = e.id % 2 ? 1 : -1; e.x += dz / h * side * 3 * dt; e.z -= dx / h * side * 3 * dt }
       if (e.kind === 'drone' && !e.vy) e.y = 6 + Math.sin(this.time * 2 + e.id) * 1.3
-      if (e.timer <= 0 && (h < preferred + 4 || e.kind === 'gunner' || e.kind === 'drone')) { e.phase = 'windup'; e.timer = boss ? 1.1 : brute ? 1 : 0.7; e.aim = { x: p.x, y: p.y, z: p.z } }
+      if (e.timer <= 0 && (h < preferred + 4 || e.kind === 'gunner' || e.kind === 'drone' || specialist || warden)) { e.phase = 'windup'; e.timer = boss || warden ? 1 : brute ? .9 : .6; e.aim = { x: p.x, y: p.y, z: p.z } }
     } else if (e.phase === 'windup' && e.timer <= 0) {
-      if (e.kind === 'striker' || brute) { if (h < (brute ? 8 : 5) && Math.abs(p.y - e.y) < 4) this.hurt(brute ? 22 : 10); if (brute) this.effect('ring', e, '#ff9674', 8, 0.4) }
+      if (specialist || warden) this.regionalAttack(e)
+      else if (e.kind === 'striker' || brute) { if (h < (brute ? 8 : 5) && Math.abs(p.y - e.y) < 4) this.hurt(brute ? 28 : 15); if (brute) this.effect('ring', e, '#ff9674', 8, 0.4) }
       else if (boss) {
         const attack = e.attack++ % 4
         if (attack === 0) for (let i = -3; i <= 3; i++) this.fire(e, i * 0.13)
         if (attack === 1) { this.effect('ring', { x: e.x, y: 0.3, z: e.z }, '#ff9760', 24, 0.8); if (h < 24 && p.y < 5) this.hurt(32) }
         if (attack === 2) { const travel = Math.min(h, 24); e.x += dx / h * travel; e.z += dz / h * travel; if (hdist(e, p) < 8 && Math.abs(p.y - e.y) < 5) this.hurt(28); this.effect('blast', e, '#ffa872', 10, 0.5) }
         if (attack === 3) for (let i = 0; i < 20; i++) this.fire(e, i * Math.PI / 10)
+        if (e.enraged) for (const hazard of attackPattern(5, e, e.aim, true, e.attack)) this.queueHazard(hazard)
       } else this.fire(e)
-      e.phase = 'recover'; e.timer = boss ? 1 : 1.4
+      e.phase = 'recover'; e.timer = warden ? 2.2 : specialist ? 1.8 : boss ? .9 : 1.05
     } else if (e.phase === 'recover' && e.timer <= 0) { e.phase = 'approach'; e.timer = 0.2 }
     const home = DISTRICTS[e.zone], r = hdist(e, home), leash = home.radius + 12
     if (r > leash) { e.x = home.x + (e.x - home.x) / r * leash; e.z = home.z + (e.z - home.z) / r * leash }
@@ -379,11 +469,12 @@ export class Game {
   tick(dt: number, resolve: CollisionResolver = groundResolver) {
     if (this.mode !== 'playing') return
     this.time += dt
+    this.updateEnvironment(dt)
     if ((this.messageTime -= dt) <= 0) { this.message = ''; this.messageSub = '' }
     if ((this.skillNoticeTime -= dt) <= 0) this.skillNotice = ''
-    for (const name of ['invincible', 'attackCooldown', 'slash', 'burst', 'slam', 'shake', 'damageFlash', 'shield', 'droneTime', 'overdrive', 'gateBoost', 'gateCooldown'] as const) this[name] = Math.max(0, this[name] - dt)
-    for (const skill of SKILLS) this.cooldowns[skill.id] = Math.max(0, this.cooldowns[skill.id] - dt * (this.overdrive > 0 ? 1.5 : 1))
-    if (this.dashes < 3 && (this.dashCharge += dt) >= 0.75) { this.dashes++; this.dashCharge = 0 }
+    for (const name of ['invincible', 'attackCooldown', 'slash', 'burst', 'slam', 'shake', 'damageFlash', 'shield', 'droneTime', 'overdrive', 'gateBoost', 'gateCooldown', 'tailwind', 'regeneration', 'armor'] as const) this[name] = Math.max(0, this[name] - dt)
+    for (const skill of SKILLS) this.cooldowns[skill.id] = Math.max(0, this.cooldowns[skill.id] - dt * (this.overdrive > 0 ? 1.5 : 1) * (this.zones[3].state === 'cleared' ? 1.18 : 1))
+    if (this.dashes < 3 && (this.dashCharge += dt) >= (this.zones[0].state === 'cleared' ? .55 : .75)) { this.dashes++; this.dashCharge = 0 }
     if (this.combo > 0 && (this.comboTime -= dt) <= 0) this.combo = 0
     for (const action of this.actions.splice(0)) {
       if (action === 'jump') this.jump(); else if (action === 'dash') this.dash(); else if (action === 'attack') this.attack()
@@ -391,11 +482,11 @@ export class Game {
     }
     if (this.keys.has('Mouse0')) this.attack()
     const step = this.hitstop > 0 ? dt * 0.15 : dt; this.hitstop = Math.max(0, this.hitstop - dt)
-    const p = this.player, held = this.keys.has('ShiftLeft') || this.keys.has('ShiftRight')
+    const p = this.player, env = this.environment, held = this.keys.has('ShiftLeft') || this.keys.has('ShiftRight')
     if (this.fuel <= 0) this.boostExhausted = true
-    if (this.fuel >= 35 || this.overdrive > 0 || this.gateBoost > 0) this.boostExhausted = false
+    if (this.fuel >= 35 || this.overdrive > 0 || this.gateBoost > 0 || this.tailwind > 0) this.boostExhausted = false
     this.boostHeld = held ? this.boostHeld + dt : 0; this.boosting = (this.boostHeld > 0.25 && !this.boostExhausted) || this.gateBoost > 0
-    this.fuel = clamp(this.fuel + (this.boosting && this.overdrive <= 0 && this.gateBoost <= 0 ? -16 : 22) * dt, 0, 100)
+    this.fuel = clamp(this.fuel + (this.boosting && this.overdrive <= 0 && this.gateBoost <= 0 && this.tailwind <= 0 ? -16 * env.fuel : 22) * dt, 0, 100)
     if (this.grappleTime > 0) {
       const e = this.enemies[this.grappleTarget]; this.grappleTime -= step
       if (!e?.active) this.grappleTime = 0
@@ -407,14 +498,15 @@ export class Game {
     } else {
       const forward = Number(this.keys.has('KeyW')) - Number(this.keys.has('KeyS')) || (this.boosting ? 1 : 0)
       const side = Number(this.keys.has('KeyD')) - Number(this.keys.has('KeyA')), len = Math.hypot(forward, side) || 1
-      const speed = this.boosting ? this.gateBoost > 0 ? 68 : 46 : this.overdrive > 0 ? 23 : 17
-      const vx = (-Math.sin(this.cameraYaw) * forward + Math.cos(this.cameraYaw) * side) / len * speed
-      const vz = (-Math.cos(this.cameraYaw) * forward - Math.sin(this.cameraYaw) * side) / len * speed
+      const speed = (this.boosting ? this.gateBoost > 0 ? 68 : 46 : this.overdrive > 0 ? 23 : 17) * env.speed
+      const vx = (-Math.sin(this.cameraYaw) * forward + Math.cos(this.cameraYaw) * side) / len * speed + env.windX * (p.grounded ? .35 : 1)
+      const vz = (-Math.cos(this.cameraYaw) * forward - Math.sin(this.cameraYaw) * side) / len * speed + env.windZ * (p.grounded ? .35 : 1)
       const blend = 1 - Math.exp(-16 * step); p.vx += (vx - p.vx) * blend; p.vz += (vz - p.vz) * blend
       if (forward || side) p.yaw = Math.atan2(p.vx, p.vz)
       const gliding = !p.grounded && !this.pendingSlam && (this.boosting || this.keys.has('Space'))
-      p.vy -= (gliding ? 7 : 30) * step
-      if (gliding) p.vy = Math.max(p.vy, this.keys.has('Space') && this.boosting && p.y < 38 ? 9 : -2.5)
+      p.vy -= (gliding ? 7 : 30) * env.gravity * step
+      if (gliding) p.vy = Math.max(p.vy, this.keys.has('Space') && this.boosting && p.y < 38 ? 9 / Math.sqrt(env.gravity) : -2.5 * env.gravity)
+      if (env.zone === 0 && !this.pendingSlam && p.y < 34 && UPDRAFTS.some(u => hdist(p, u) < u.radius)) { p.vy = Math.max(p.vy, 12); this.fuel = Math.min(100, this.fuel + 28 * step); p.jumps = Math.min(p.jumps, 1) }
       if (this.boosting) this.emit({ x: p.x, y: p.y - 0.3, z: p.z }, this.overdrive > 0 ? '#ffdf9b' : '#6deaf9', 2, 3)
     }
     const previous = { x: p.x, y: p.y, z: p.z }, moved = resolve(p, { x: p.vx * step, y: p.vy * step, z: p.vz * step })
@@ -423,7 +515,9 @@ export class Game {
     if (this.dashTime > 0) for (const e of this.enemies) if (e.active && !this.blinkVictims.has(e.id) && (distance(e, p) < 4 || distance(e, previous) < 4)) { this.blinkVictims.add(e.id); this.damageEnemy(e, 45) }
     if (p.grounded && this.pendingSlam) {
       this.pendingSlam = false; this.slam = 0.5; this.burstOrigin = { ...p }; this.shake = 0.35; this.emit(p, '#a4f7ed', 45, 24)
-      this.effect('ring', p, '#b4fff4', 14, 0.5); this.audio.play('skill'); for (const e of this.enemies) if (e.active && distance(e, p) < 14) this.damageEnemy(e, 110, true)
+      const radius = this.zones[2].state === 'cleared' ? 18 : 14
+      const impact = (this.zones[2].state === 'cleared' ? 140 : 110) * (env.zone === 2 ? 1.4 : 1)
+      this.effect('ring', p, '#b4fff4', radius, 0.5); this.audio.play('skill'); for (const e of this.enemies) if (e.active && distance(e, p) < radius) this.damageEnemy(e, impact, true)
     }
     if (p.y > 65) p.vy = Math.min(p.vy, -5)
     if (p.y < -24 || Math.abs(p.x) > FIELD.width / 2 + 60 || p.z < FIELD.minZ - 60 || p.z > FIELD.maxZ + 60) {
@@ -438,7 +532,7 @@ export class Game {
     }
     if (this.cyclone > 0) {
       this.cyclone -= step; this.cyclonePulse -= step
-      for (const e of this.enemies) if (e.active && e.kind !== 'boss' && distance(e, p) < 19) { e.x += (p.x - e.x) * step * 2; e.z += (p.z - e.z) * step * 2 }
+      for (const e of this.enemies) if (e.active && e.kind !== 'boss' && e.kind !== 'warden' && distance(e, p) < 19) { e.x += (p.x - e.x) * step * 2; e.z += (p.z - e.z) * step * 2 }
       if (this.cyclonePulse <= 0) { this.cyclonePulse = 0.25; this.effect('ring', p, '#8affdf', 17, 0.35); for (const e of this.enemies) if (e.active && distance(e, p) < 18) this.damageEnemy(e, 25, this.cyclone < 0.3) }
     }
     if (this.droneTime > 0 && (this.dronePulse -= step) <= 0) {
@@ -448,12 +542,18 @@ export class Game {
       })
     }
     if (this.mode === 'playing') for (const e of this.enemies) this.updateEnemy(e, step)
+    this.updateHazards(dt)
     for (const s of this.shots) {
       if (!s.active) continue
+      if (s.homing && !s.friendly) {
+        const d = distance(s, p) || 1, speed = Math.hypot(s.vx, s.vy, s.vz)
+        const turn = Math.min(1, step * 1.2)
+        s.vx += ((p.x - s.x) / d * speed - s.vx) * turn; s.vy += ((p.y - s.y) / d * speed - s.vy) * turn; s.vz += ((p.z - s.z) / d * speed - s.vz) * turn
+      }
       s.x += s.vx * step; s.y += s.vy * step; s.z += s.vz * step; s.life -= step
       if (!s.friendly && this.shield > 0 && distance(s, p) < 5) { s.friendly = true; s.vx *= -1.7; s.vy *= -1.7; s.vz *= -1.7; s.life = 3; this.effect('ring', s, '#bddaff', 2, 0.25); this.audio.play('shield') }
       if (s.friendly) { for (const e of this.enemies) if (e.active && distance(e, s) < (e.kind === 'boss' ? 5 : 2.5)) { this.damageEnemy(e, 100); s.active = false; break } }
-      else if (distance(s, p) < 1.4) { this.hurt(10); s.active = false }
+      else if (distance(s, p) < 1.4) { this.hurt(s.damage); s.active = false }
       if (s.life <= 0 || s.y < 0) s.active = false
     }
     for (const v of this.particles) if (v.life > 0) { v.life -= dt; v.x += v.vx * dt; v.y += v.vy * dt; v.z += v.vz * dt; v.vy -= 12 * dt }

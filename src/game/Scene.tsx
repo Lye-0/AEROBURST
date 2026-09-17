@@ -6,6 +6,8 @@ import { game, viewDirection } from './core'
 import { World } from './Landscape'
 import { SkillEffects } from './SkillEffects'
 import { SPAWN } from './world'
+import { BIOMES } from './biomes'
+import { HazardEffects } from './HazardEffects'
 
 const ivory = '#e9efdf'
 const dark = '#163c49'
@@ -98,6 +100,10 @@ function EnemyModel({ index }: { index: number }) {
   const drone = useRef<THREE.Group>(null!)
   const boss = useRef<THREE.Group>(null!)
   const cannon = useRef<THREE.Group>(null!)
+  const sigil = useRef<THREE.Mesh>(null!)
+  const crown = useRef<THREE.Group>(null!)
+  const crownMaterial = useRef<THREE.MeshStandardMaterial>(null!)
+  const coreMaterial = useRef<THREE.MeshBasicMaterial>(null!)
   useFrame(({ clock }) => {
     const e = game.enemies[index]
     group.current.visible = e.active && Math.hypot(e.x - game.player.x, e.z - game.player.z) < 190
@@ -105,19 +111,28 @@ function EnemyModel({ index }: { index: number }) {
     group.current.position.set(e.x, e.y, e.z)
     body.current.rotation.y = e.yaw
     body.current.rotation.z = e.flash > 0 ? Math.sin(clock.elapsedTime * 70) * 0.15 : 0
-    striker.current.visible = e.kind === 'striker' || e.kind === 'gunner' || e.kind === 'brute'
+    striker.current.visible = e.kind === 'striker' || e.kind === 'gunner' || e.kind === 'brute' || e.kind === 'specialist'
     striker.current.scale.setScalar(e.kind === 'brute' ? 1.65 : e.kind === 'gunner' ? 1.15 : 1)
-    cannon.current.visible = e.kind === 'gunner'
+    cannon.current.visible = e.kind === 'gunner' || e.kind === 'specialist'
     drone.current.visible = e.kind === 'drone'
     drone.current.rotation.z = Math.sin(clock.elapsedTime * 2 + index) * 0.12
-    boss.current.visible = e.kind === 'boss'
-    boss.current.scale.setScalar(1.5)
-    hp.current.position.y = e.kind === 'boss' ? 5 : e.kind === 'brute' ? 2.5 : 1.7
-    hp.current.scale.x = Math.max(0.01, e.hp / e.maxHp) * (e.kind === 'boss' ? 3 : 1.5)
+    boss.current.visible = e.kind === 'boss' || e.kind === 'warden'
+    boss.current.scale.setScalar(e.kind === 'warden' ? 1.15 : 1.5)
+    sigil.current.visible = e.kind === 'specialist'
+    sigil.current.rotation.y = clock.elapsedTime
+    ;(sigil.current.material as THREE.MeshBasicMaterial).color.set(BIOMES[e.zone].color)
+    crown.current.visible = e.kind === 'warden'
+    crown.current.rotation.y = clock.elapsedTime * .5
+    crownMaterial.current.color.set(BIOMES[e.zone].color)
+    crownMaterial.current.emissive.set(BIOMES[e.zone].color)
+    crownMaterial.current.emissiveIntensity = e.phase === 'recover' ? 2.5 : .2
+    coreMaterial.current.color.set(e.kind === 'warden' ? e.phase === 'recover' ? BIOMES[e.zone].color : '#845d46' : '#ffa36a')
+    hp.current.position.y = e.kind === 'boss' ? 5 : e.kind === 'warden' ? 4 : e.kind === 'brute' ? 2.5 : 1.7
+    hp.current.scale.x = Math.max(0.01, e.hp / e.maxHp) * (e.kind === 'boss' || e.kind === 'warden' ? 3 : 1.5)
     hp.current.quaternion.copy(gameCameraQuaternion)
     warning.current.visible = e.phase === 'windup'
     warning.current.position.y = -e.y + 0.06
-    const size = e.kind === 'boss' ? (e.attack % 4 === 1 ? 24 : 10) : e.kind === 'brute' ? 8 : e.kind === 'striker' ? 4 : 2
+    const size = e.kind === 'boss' ? (e.attack % 4 === 1 ? 24 : 10) : e.kind === 'warden' ? 6 : e.kind === 'brute' ? 8 : e.kind === 'striker' ? 4 : 2
     warning.current.scale.setScalar(size * (1 - e.timer * 0.12))
     ;(warning.current.material as THREE.MeshBasicMaterial).opacity = 0.25 + (1 - e.timer) * 0.3
   })
@@ -148,7 +163,7 @@ function EnemyModel({ index }: { index: number }) {
         <Box position={[0, 0.25, 0]} scale={[2.8, 2.4, 1.65]} color="#293f48" />
         <Box position={[0, 1.6, 0.2]} scale={[1.15, 0.85, 1.1]} color="#eee5d0" />
         <Box position={[0, 1.62, 0.8]} scale={[0.9, 0.17, 0.08]} color="#ff8b45" glow />
-        <mesh position={[0, 0.4, 0.9]} rotation={[Math.PI / 2, 0, 0]}><cylinderGeometry args={[0.55, 0.55, 0.2, 6]} /><meshBasicMaterial color="#ffa36a" /></mesh>
+        <mesh position={[0, 0.4, 0.9]} rotation={[Math.PI / 2, 0, 0]}><cylinderGeometry args={[0.55, 0.55, 0.2, 6]} /><meshBasicMaterial ref={coreMaterial} color="#ffa36a" toneMapped={false} /></mesh>
         {[-1, 1].map(s => <group key={s}>
           <Box position={[s * 1.8, 0.7, 0]} scale={[1.15, 1.3, 1.5]} color="#d47f57" rotation={[0, 0, s * 0.25]} />
           <Box position={[s * 2.2, -0.5, 0.3]} scale={[0.65, 1.7, 0.75]} color="#293f48" />
@@ -156,6 +171,11 @@ function EnemyModel({ index }: { index: number }) {
           <Box position={[s * 2.2, -0.75, 1.4]} scale={[0.25, 0.4, 2.8]} color="#ff9f58" glow />
         </group>)}
       </group>
+    </group>
+    <mesh ref={sigil} position={[0,2.2,0]}><octahedronGeometry args={[.35]} /><meshBasicMaterial color="#c7ffff" /></mesh>
+    <group ref={crown} position={[0,2.9,0]}>
+      <mesh rotation={[Math.PI/2,0,0]}><torusGeometry args={[2.1,.16,8,32]} /><meshStandardMaterial ref={crownMaterial} color="#d1ddff" /></mesh>
+      {[0,1,2].map(i=><mesh key={i} position={[Math.sin(i*Math.PI*2/3)*2.1,.4,Math.cos(i*Math.PI*2/3)*2.1]}><octahedronGeometry args={[.55]} /><meshStandardMaterial color="#e9d9cd" metalness={.6} /></mesh>)}
     </group>
     <mesh ref={hp}><planeGeometry args={[1, 0.06]} /><meshBasicMaterial color="#f7946d" side={THREE.DoubleSide} /></mesh>
     <mesh ref={warning} rotation={[-Math.PI / 2, 0, 0]}><ringGeometry args={[0.7, 1, 48]} /><meshBasicMaterial color="#ff5b2e" transparent opacity={0.5} depthWrite={false} side={THREE.DoubleSide} /></mesh>
@@ -183,7 +203,7 @@ function Effects() {
     game.shots.forEach((s, i) => {
       temp.position.set(s.x, s.y, s.z); temp.rotation.set(0, 0, 0); temp.scale.setScalar(s.active ? 0.23 : 0)
       temp.updateMatrix(); shots.current.setMatrixAt(i, temp.matrix)
-      shots.current.setColorAt(i, color.set(s.friendly ? '#bceaff' : '#ff733a'))
+      shots.current.setColorAt(i, color.set(s.friendly ? '#bceaff' : s.color))
     })
     shots.current.instanceMatrix.needsUpdate = true
     if (shots.current.instanceColor) shots.current.instanceColor.needsUpdate = true
@@ -306,6 +326,6 @@ export const Scene = memo(function Scene({ onReady, quality }: { onReady: () => 
     </Physics>
     <Pilot />
     {game.enemies.map(e => <EnemyModel key={e.id} index={e.id} />)}
-    <Effects /><SkillEffects />
+    <Effects /><SkillEffects /><HazardEffects />
   </Canvas>
 })

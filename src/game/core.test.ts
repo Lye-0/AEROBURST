@@ -52,6 +52,7 @@ describe('movement and recovery', () => {
     expect(game.player.z).toBe(z); expect(game.time).toBe(time); expect(game.keys.size).toBe(0)
   })
   it('allows two jumps and resets on landing', () => {
+    game.enemies.forEach(e => { e.timer = 999 })
     game.jump(); advance(.1); game.jump(); const vy = game.player.vy
     game.jump(); expect(game.player.vy).toBe(vy); expect(game.player.jumps).toBe(2)
     advance(3); expect(game.player.grounded).toBe(true); expect(game.player.jumps).toBe(0)
@@ -149,7 +150,7 @@ describe('open field progression', () => {
       Object.assign(game.player, { x: d.x, y: 1.15, z: d.z }); game.activateZone(d.id)
       expect(game.zones[d.id].state).toBe('combat')
       for (let wave = 0; wave < d.waves; wave++) {
-        for (const e of game.enemies) if (e.active && e.zone === d.id) game.damageEnemy(e, e.hp)
+        for (const e of game.enemies) if (e.active && e.zone === d.id) game.damageEnemy(e, e.hp * 2)
         advance(1.8)
       }
       expect(game.zones[d.id].state).toBe('cleared')

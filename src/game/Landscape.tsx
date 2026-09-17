@@ -4,6 +4,8 @@ import { CuboidCollider, RigidBody } from '@react-three/rapier'
 import * as THREE from 'three'
 import { game } from './core'
 import { BOOST_GATES, CACHES, DISTRICTS, FIELD, LAUNCH_PADS, ROUTES } from './world'
+import { BIOMES } from './biomes'
+import { BiomeScenery } from './BiomeScenery'
 
 const dummy = new THREE.Object3D()
 function Structure({ position, size, color = '#d8e2d9' }: { position: [number, number, number]; size: [number, number, number]; color?: string }) {
@@ -24,7 +26,7 @@ function District({ index }: { index: number }) {
     beacon.current.visible = state !== 'cleared'
   })
   return <group position={[d.x, 0, d.z]}>
-    <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.025, 0]} receiveShadow><circleGeometry args={[d.radius, 80]} /><meshStandardMaterial color={index === 1 ? '#aac8ac' : index === 4 ? '#aec4cd' : '#d2dbd2'} roughness={0.85} /></mesh>
+    <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.025, 0]} receiveShadow><circleGeometry args={[d.radius, 80]} /><meshStandardMaterial color={BIOMES[index].ground} roughness={index===4?.3:.85} metalness={index===4?.45:0} /></mesh>
     {[d.radius - 1, d.radius - 5, 30].map((r, i) => <mesh key={r} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.05, 0]}><ringGeometry args={[r, r + (i === 0 ? 0.45 : 0.12), 80]} /><meshBasicMaterial color={i === 0 ? d.color : '#8faeac'} /></mesh>)}
     <mesh ref={beacon} position={[0, 70, 0]}><cylinderGeometry args={[0.15, 1.6, 140, 12, 1, true]} /><meshBasicMaterial color={d.color} transparent opacity={0.2} depthWrite={false} side={THREE.DoubleSide} /></mesh>
     <mesh ref={crystal} position={[0, 11, 0]}><octahedronGeometry args={[2.8]} /><meshBasicMaterial color={d.color} toneMapped={false} /></mesh>
@@ -39,10 +41,6 @@ function District({ index }: { index: number }) {
         <mesh position={[0, height / 2, 2.52]}><planeGeometry args={[0.3, height * 0.8]} /><meshBasicMaterial color={d.color} /></mesh>
       </group>
     })}
-    {index === 1 && Array.from({ length: 7 }, (_, i) => <group key={i} position={[Math.sin(i) * 42, 0, Math.cos(i) * 42]}>
-      <Structure position={[0, 3, 0]} size={[1.2, 6, 1.2]} color="#617f73" />
-      <mesh position={[0, 7, 0]} scale={[5, 4, 5]}><icosahedronGeometry args={[1, 0]} /><meshStandardMaterial color={i % 2 ? '#93b99d' : '#c5cc93'} flatShading /></mesh>
-    </group>)}
     {(index === 3 || index === 5) && <group position={[0, index === 5 ? 48 : 30, -d.radius + 6]}>
       <mesh><torusGeometry args={[index === 5 ? 37 : 24, 1.8, 8, 80]} /><meshStandardMaterial color="#dce8df" metalness={0.35} /></mesh>
       <mesh position={[0, 0, 1]}><torusGeometry args={[index === 5 ? 34.5 : 21.5, 0.25, 6, 80]} /><meshBasicMaterial color={d.color} /></mesh>
@@ -110,6 +108,10 @@ export const World = memo(function World() {
           return <CuboidCollider key={i} args={[2, h / 2, 2.5]} position={[d.x + Math.sin(a) * r, h / 2, d.z + Math.cos(a) * r]} rotation={[0, a, 0]} />
         })}
       </group>)}
+      {[-1,1].map(s=><CuboidCollider key={`dock-${s}`} args={[4.5,2,7.5]} position={[s*38,2,95]} />)}
+      {Array.from({length:16},(_,i)=>{const a=i*Math.PI/8,r=43+i%3*4;return <CuboidCollider key={`tree-${i}`} args={[.8,6,.8]} position={[-205+Math.sin(a)*r,6,-35+Math.cos(a)*r]} />})}
+      {[-1,1].flatMap(s=>[-1,0,1].map(i=><CuboidCollider key={`prism-${s}-${i}`} args={[2,8,2]} position={[210+s*39,8,-85+i*22]} />))}
+      {[-1,1].flatMap(s=>[-1,1].map(t=><CuboidCollider key={`coil-${s}-${t}`} args={[1.5,11,1.5]} position={[170+s*41,11,-370+t*32]} />))}
     </RigidBody>
     <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -32, -230]}><planeGeometry args={[2800, 2800]} /><meshStandardMaterial color="#81becb" metalness={0.4} roughness={0.3} /></mesh>
     {ROUTES.map(([a, b]) => {
@@ -131,7 +133,7 @@ export const World = memo(function World() {
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.01, 0]}><ringGeometry args={[2.5, 2.85, 24]} /><meshBasicMaterial color="#ccffb9" /></mesh>
       <Structure position={[0, 0.025, 0]} size={[0.18, 0.05, 3]} color="#ccffb9" /><Structure position={[0, 0.025, 0]} size={[3, 0.05, 0.18]} color="#ccffb9" />
     </group>)}
-    <LandscapeInstances /><Collectibles />
+    <LandscapeInstances /><Collectibles /><BiomeScenery />
     <mesh position={[450, 300, -950]}><sphereGeometry args={[55, 24, 16]} /><meshBasicMaterial color="#fff3cd" fog={false} /></mesh>
     {Array.from({ length: 16 }, (_, i) => <mesh key={i} position={[Math.sin(i * 2.4) * 650, 80 + i % 3 * 25, -300 + Math.cos(i * 2.4) * 700]} scale={[75 + i % 3 * 35, 9, 30]}>
       <icosahedronGeometry args={[1, 1]} /><meshBasicMaterial color="#f2f6e9" transparent opacity={0.55} depthWrite={false} />
