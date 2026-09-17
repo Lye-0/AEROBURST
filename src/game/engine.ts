@@ -461,7 +461,7 @@ export class Game {
         if (attack === 3) for (let i = 0; i < 20; i++) this.fire(e, i * Math.PI / 10)
         if (e.enraged) for (const hazard of attackPattern(5, e, e.aim, true, e.attack)) this.queueHazard(hazard)
       } else this.fire(e)
-      e.phase = 'recover'; e.timer = warden ? 2.2 : specialist ? 1.8 : boss ? .9 : 1.05
+      e.phase = 'recover'; e.timer = warden ? 2.6 : specialist ? 2.2 : boss ? 1.2 : 1.4
     } else if (e.phase === 'recover' && e.timer <= 0) { e.phase = 'approach'; e.timer = 0.2 }
     const home = DISTRICTS[e.zone], r = hdist(e, home), leash = home.radius + 12
     if (r > leash) { e.x = home.x + (e.x - home.x) / r * leash; e.z = home.z + (e.z - home.z) / r * leash }
